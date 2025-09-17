@@ -5,14 +5,33 @@ const PRODUCTS = {
 };
 
 function getBasket() {
-  const basket = localStorage.getItem("basket");
-  return basket ? JSON.parse(basket) : [];
+  const raw = localStorage.getItem("basket");
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    // Backwards compatibility: if old format (array of product ids), convert to map
+    if (Array.isArray(parsed)) {
+      const map = {};
+      parsed.forEach((p) => {
+        map[p] = (map[p] || 0) + 1;
+      });
+      return map;
+    }
+    // Otherwise expect an object map { productId: quantity, ... }
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveBasket(map) {
+  localStorage.setItem("basket", JSON.stringify(map));
 }
 
 function addToBasket(product) {
   const basket = getBasket();
-  basket.push(product);
-  localStorage.setItem("basket", JSON.stringify(basket));
+  basket[product] = (basket[product] || 0) + 1;
+  saveBasket(basket);
 }
 
 function clearBasket() {
@@ -25,16 +44,17 @@ function renderBasket() {
   const cartButtonsRow = document.querySelector(".cart-buttons-row");
   if (!basketList) return;
   basketList.innerHTML = "";
-  if (basket.length === 0) {
+  const entries = Object.entries(basket).filter(([, qty]) => qty > 0);
+  if (entries.length === 0) {
     basketList.innerHTML = "<li>No products in basket.</li>";
     if (cartButtonsRow) cartButtonsRow.style.display = "none";
     return;
   }
-  basket.forEach((product) => {
+  entries.forEach(([product, qty]) => {
     const item = PRODUCTS[product];
     if (item) {
       const li = document.createElement("li");
-      li.innerHTML = `<span class='basket-emoji'>${item.emoji}</span> <span>${item.name}</span>`;
+      li.innerHTML = `<span class='basket-emoji'>${item.emoji}</span> <span>${qty}x ${item.name}</span>`;
       basketList.appendChild(li);
     }
   });
@@ -43,6 +63,7 @@ function renderBasket() {
 
 function renderBasketIndicator() {
   const basket = getBasket();
+  const total = Object.values(basket).reduce((s, q) => s + (q || 0), 0);
   let indicator = document.querySelector(".basket-indicator");
   if (!indicator) {
     const basketLink = document.querySelector(".basket-link");
@@ -51,8 +72,8 @@ function renderBasketIndicator() {
     indicator.className = "basket-indicator";
     basketLink.appendChild(indicator);
   }
-  if (basket.length > 0) {
-    indicator.textContent = basket.length;
+  if (total > 0) {
+    indicator.textContent = total;
     indicator.style.display = "flex";
   } else {
     indicator.style.display = "none";
@@ -66,14 +87,28 @@ if (document.readyState !== "loading") {
   document.addEventListener("DOMContentLoaded", renderBasketIndicator);
 }
 
-// Patch basket functions to update indicator
+// Patch basket functions to update indicator and visible basket (if present)
 const origAddToBasket = window.addToBasket;
 window.addToBasket = function (product) {
-  origAddToBasket(product);
+  // If there was an existing global, call it for compatibility, otherwise use the new implementation
+  if (typeof origAddToBasket === "function") {
+    origAddToBasket(product);
+    // origAddToBasket may have stored an array; ensure our format is normalized
+    const normalized = getBasket();
+    saveBasket(normalized);
+  } else {
+    addToBasket(product);
+  }
   renderBasketIndicator();
+  renderBasket();
 };
 const origClearBasket = window.clearBasket;
 window.clearBasket = function () {
-  origClearBasket();
+  if (typeof origClearBasket === "function") {
+    origClearBasket();
+  } else {
+    clearBasket();
+  }
   renderBasketIndicator();
+  renderBasket();
 };
